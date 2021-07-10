@@ -389,11 +389,6 @@ pub fn reconstruct_from_srcs(
     verify: bool,
 ) -> Result<(), Error> {
     // This is to avoid multiple reference issues.
-    let path = match secret {
-        Secret::InFile(path) => String::from(path.to_str().unwrap()),
-        _ => String::from("<Cannot be determined>"),
-    };
-
     let to_points = |vec: Vec<u8>, segment_num: u8| -> Vec<(u8, u8)> {
         vec.into_iter().map(|val| (segment_num, val)).collect()
     };
@@ -407,8 +402,7 @@ pub fn reconstruct_from_srcs(
         for (src, x_val) in srcs.iter_mut().zip(x_vals) {
             let mut buf: Vec<u8> = Vec::with_capacity(num_bytes as usize);
             src.take(num_bytes as u64)
-                .read_to_end(&mut buf)
-                .map_err(|e| Error::FileError(path.clone(), e))?;
+                .read_to_end(&mut buf)?;
             segments.push(to_points(buf, *x_val));
         }
         Ok(segments)
@@ -456,8 +450,7 @@ pub fn reconstruct_from_srcs(
             let segments = get_shares(READ_SEGMENT_SIZE, srcs, &x_vals)?;
             // Now segments has a segment from each share src, reconstruct the secret up to that
             // point and write it to the destination
-            dest.write_all(reconstruct_secrets(segments)?.as_slice())
-                .map_err(|e| Error::FileError(path.clone(), e))?;
+            dest.write_all(reconstruct_secrets(segments)?.as_slice())?;
         }
     }
 
@@ -466,8 +459,7 @@ pub fn reconstruct_from_srcs(
     let remaining_bytes = (src_len % (READ_SEGMENT_SIZE as u64)) as usize;
     if remaining_bytes > 0 {
         let last_segments = get_shares(remaining_bytes, &mut srcs, &x_vals)?;
-        dest.write_all(reconstruct_secrets(last_segments)?.as_slice())
-            .map_err(|e| Error::FileError(path.clone(), e))?;
+        dest.write_all(reconstruct_secrets(last_segments)?.as_slice())?;
     }
 
     if verify {
