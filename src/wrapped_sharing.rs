@@ -6,7 +6,6 @@ use std::fs::File;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
-const NUM_FIRST_BYTES_FOR_VERIFY: usize = 32;
 pub const READ_SEGMENT_SIZE: usize = 8_192; // 8 KB, which has shown optimal perforamnce
 
 /// Contains the secret, whether in file or in memory stored in a Vec of bytes.
@@ -38,6 +37,7 @@ impl Secret {
 
     /// (u8, u8)s the secret to a file. This file can either be a source for the secret, or an output
     /// file for reconstructing a secret
+    /// (Developers note: Wtf did I mean by (u8, u8)s????)
     pub fn point_at_file<T: Into<PathBuf>>(path: T) -> Self {
         Secret::InFile(path.into())
     }
@@ -54,7 +54,7 @@ impl Secret {
         }
     }
 
-    /// Calculates and returns the Sha3-512 hash of the first 64 bytes of the secret.
+    /// Calculates and returns the Sha3-512 hash of the secret.
     ///
     /// This is mainly used for verifying secret reconstruction, where the chances of incorrect
     /// reconstruction resulting in the first 64 bytes being correct is extremely low.
@@ -63,28 +63,11 @@ impl Secret {
     pub fn calculate_hash(&self) -> Result<Vec<u8>, Error> {
         let mut hasher_output = [0u8; 64];
         let mut hasher = Sha3::sha3_512();
-        let len = self.len()?;
-        let hash_input_num_bytes = if len < (NUM_FIRST_BYTES_FOR_VERIFY as u64) {
-            len as usize
-        } else {
-            NUM_FIRST_BYTES_FOR_VERIFY
-        };
 
-        let mut input_vec = Vec::with_capacity(hash_input_num_bytes);
-
-        match self {
-            Secret::InFile(ref path) => {
-                let f = File::open(path)
-                    .map_err(|e| Error::secret_file_error(self, e))?;
-                f.take(hash_input_num_bytes as u64)
-                    .read_to_end(&mut input_vec)
-                    .map_err(|e| Error::secret_file_error(self, e))?;
-            }
-            Secret::InMemory(ref secret) => {
-                input_vec.extend_from_slice(&secret[0..hash_input_num_bytes]);
-            }
+        for chunk in (&self).into_iter() {
+            hasher.input(&chunk?);
         }
-        hasher.input(input_vec.as_slice());
+
         hasher.result(&mut hasher_output);
         Ok(hasher_output.to_vec())
     }
