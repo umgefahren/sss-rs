@@ -89,7 +89,7 @@ pub fn from_secrets(
     shares_to_create: u8,
     rand: Option<&mut dyn RngCore>,
 ) -> Result<Vec<Vec<(u8, u8)>>, Error> {
-    if secret.len() == 0 {
+    if secret.is_empty() {
         return Err(Error::EmptySecretArray);
     }
 
@@ -134,9 +134,7 @@ pub fn from_secrets(
 ///     of the secret.
 ///
 /// *For the rest of the arguments, see [reconstruct_secret]*
-pub fn reconstruct_secrets(
-    share_lists: Vec<Vec<(u8, u8)>>,
-) -> Result<Vec<u8>, Error> {
+pub fn reconstruct_secrets(share_lists: Vec<Vec<(u8, u8)>>) -> Result<Vec<u8>, Error> {
     let mut secrets: Vec<u8> = Vec::with_capacity(share_lists[0].len());
     let share_lists = transpose_vec_matrix(share_lists)?;
     for point_list in share_lists {
@@ -169,7 +167,7 @@ pub fn from_secrets_no_points(
     Ok(
         from_secrets(secret, shares_required, shares_to_create, rand)?
             .into_iter()
-            .map(|share| reduce_share(share))
+            .map(reduce_share)
             .map(|(x, ys)| {
                 let mut new_share = Vec::with_capacity(ys.len() + 1);
                 new_share.push(x);
@@ -181,7 +179,7 @@ pub fn from_secrets_no_points(
 }
 
 /// Wrapper around its corresponding share function, it simply uses the [expand_share]
-/// function to reconstruct the secret from shares created using 
+/// function to reconstruct the secret from shares created using
 /// [from_secrets_no_points]
 ///
 /// The format the shares are to be in are as follows:
@@ -192,15 +190,8 @@ pub fn from_secrets_no_points(
 /// meant to mix with the other raw_share functions and vice-versa.
 ///
 /// See [reconstruct_secrets] for more documentation.
-pub fn reconstruct_secrets_no_points(
-    share_lists: Vec<Vec<u8>>,
-) -> Result<Vec<u8>, Error> {
-    reconstruct_secrets(
-        share_lists
-            .into_iter()
-            .map(|share| expand_share(share))
-            .collect(),
-    )
+pub fn reconstruct_secrets_no_points(share_lists: Vec<Vec<u8>>) -> Result<Vec<u8>, Error> {
+    reconstruct_secrets(share_lists.into_iter().map(expand_share).collect())
 }
 
 /// This 'compresses' a share by pulling out it's X value from each point since
@@ -217,12 +208,13 @@ pub fn reduce_share(share: Vec<(u8, u8)>) -> (u8, Vec<u8>) {
 /// This allows for the share to be properly reconstructed.
 pub fn expand_share(share: Vec<u8>) -> Vec<(u8, u8)> {
     let x_value = share[0];
-    share[1..].into_iter().map(|y| (x_value, *y)).collect()
+    share[1..].iter().map(|y| (x_value, *y)).collect()
 }
 
 /// Transposes a Vec of Vecs if it is a valid matrix. If it is not an error is returned.
 ///
 /// **matrix:** The matrix to be transposed, must be a valid matrix else an error is returned.
+#[allow(clippy::needless_range_loop)]
 pub fn transpose_vec_matrix<T: Clone>(matrix: Vec<Vec<T>>) -> Result<Vec<Vec<T>>, Error> {
     for i in 1..matrix.len() {
         if matrix[i - 1].len() != matrix[i].len() {
@@ -318,8 +310,7 @@ mod tests {
         }
         */
 
-        let shares =
-            from_secret(secret, shares_required, shares_to_create, None).unwrap();
+        let shares = from_secret(secret, shares_required, shares_to_create, None).unwrap();
 
         let secret_decrypted = reconstruct_secret(shares);
         assert_eq!(secret, secret_decrypted);
@@ -355,8 +346,7 @@ mod tests {
         let now = Instant::now();
 
         let share_lists =
-            from_secrets(secret.as_bytes(), shares_required, shares_to_create)
-                .unwrap();
+            from_secrets(secret.as_bytes(), shares_required, shares_to_create).unwrap();
 
         let recon_secret_vec = reconstruct_secrets(share_lists).unwrap();
         let recon_secret = String::from_utf8(recon_secret_vec).unwrap();
@@ -376,6 +366,4 @@ mod tests {
         let recon = reconstruct_secrets_no_points(shares).unwrap();
         assert_eq!(secret, recon);
     }
-
-
 }

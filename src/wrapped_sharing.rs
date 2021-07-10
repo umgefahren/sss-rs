@@ -53,6 +53,12 @@ impl Secret {
             Secret::InMemory(vec) => Ok(vec.len() as u64),
         }
     }
+    /// Attempts to check if the Secret is empty.
+    ///
+    /// This can fail if the secret is a file path that doesn't exist.
+    pub fn is_empty(&self) -> Result<bool, Error> {
+        Ok(self.len()? == 0)
+    }
 
     /// Calculates and returns the Sha3-512 hash of the secret.
     ///
@@ -109,7 +115,7 @@ impl Secret {
     /// Returns None if the inner value is a path, else returns the secret.
     pub fn try_unwrap_vec(&mut self) -> Option<Vec<u8>> {
         match self {
-            Secret::InMemory(ref mut secret) => Some(std::mem::replace(secret, Vec::new())),
+            Secret::InMemory(ref mut secret) => Some(std::mem::take(secret)),
             _ => None,
         }
     }
@@ -133,9 +139,8 @@ impl Secret {
     pub fn unwrap_to_vec(self) -> Result<Vec<u8>, Error> {
         match self {
             Secret::InMemory(secret) => Ok(secret),
-            Secret::InFile(path) => {
-                std::fs::read(&path).map_err(|e| Error::FileError(String::from(path.to_str().unwrap()), e))
-            }
+            Secret::InFile(path) => std::fs::read(&path)
+                .map_err(|e| Error::FileError(String::from(path.to_str().unwrap()), e)),
         }
     }
 
@@ -146,7 +151,9 @@ impl Secret {
     pub fn unwrap_to_vec_clone(&self) -> Result<Vec<u8>, Error> {
         match self {
             Secret::InMemory(ref secret) => Ok(secret.clone()),
-            Secret::InFile(path) => std::fs::read(path).map_err(|e| Error::secret_file_error(self, e))
+            Secret::InFile(path) => {
+                std::fs::read(path).map_err(|e| Error::secret_file_error(self, e))
+            }
         }
     }
 }
@@ -199,7 +206,7 @@ impl std::iter::Iterator for SecretIterator {
                 _ => e.into(),
             }));
         }
-        if result.len() == 0 {
+        if result.is_empty() {
             return None;
         }
         Some(Ok(result))
@@ -225,7 +232,7 @@ pub fn share_to_writables(
     // is written here as a closure since it's used at two different points in this function
     let share_lists_to_dests =
         |lists: Vec<Vec<(u8, u8)>>, mut dests: &mut Vec<Box<dyn Write>>| -> Result<(), Error> {
-            for (share_list, dest) in lists.into_iter().zip((&mut dests).into_iter()) {
+            for (share_list, dest) in lists.into_iter().zip((&mut dests).iter_mut()) {
                 dest.write_all(
                     share_list
                         .into_iter()
@@ -238,8 +245,8 @@ pub fn share_to_writables(
         };
 
     // Write out the x value to each dest that will be used for each following point
-    for (x_val, dest) in dests.into_iter().enumerate() {
-        dest.write(&[(x_val + 1) as u8])?;
+    for (x_val, dest) in dests.iter_mut().enumerate() {
+        dest.write_all(&[(x_val + 1) as u8])?;
     }
 
     if dests.len() < (shares_to_create as usize) {
@@ -254,7 +261,7 @@ pub fn share_to_writables(
         // if the secret is a file and a reading error occured during iteration
         let secret_segment = secret_segment?;
 
-        if secret_segment.len() > 0 {
+        if !secret_segment.is_empty() {
             let share_lists = from_secrets(
                 secret_segment.as_slice(),
                 shares_required,
@@ -278,7 +285,7 @@ pub fn share_to_writables(
     }
 
     // Flush writes to all dests to ensure all bytes are written
-    for dest in (&mut dests).into_iter() {
+    for dest in dests.iter_mut() {
         dest.flush().ok();
     }
     Ok(())
@@ -381,7 +388,6 @@ pub fn reconstruct_from_srcs(
     src_len: u64,
     verify: bool,
 ) -> Result<(), Error> {
-
     // This is to avoid multiple reference issues.
     let path = match secret {
         Secret::InFile(path) => String::from(path.to_str().unwrap()),
@@ -398,7 +404,7 @@ pub fn reconstruct_from_srcs(
         let mut segments: Vec<Vec<(u8, u8)>> = Vec::with_capacity(srcs.len());
 
         // Read in one segment size from each share
-        for (src, x_val) in srcs.into_iter().zip(x_vals) {
+        for (src, x_val) in srcs.iter_mut().zip(x_vals) {
             let mut buf: Vec<u8> = Vec::with_capacity(num_bytes as usize);
             src.take(num_bytes as u64)
                 .read_to_end(&mut buf)
@@ -411,7 +417,7 @@ pub fn reconstruct_from_srcs(
     // First, get the first byte from each share, which is the x value for those shares
     let mut buf = Vec::with_capacity(1);
     let mut x_vals = Vec::with_capacity(srcs.len());
-    for src in srcs.into_iter() {
+    for src in srcs.iter_mut() {
         buf.clear();
         src.take(1)
             .read_to_end(&mut buf)
@@ -437,10 +443,10 @@ pub fn reconstruct_from_srcs(
 
     let mut dest: Box<dyn Write> = match secret {
         Secret::InMemory(ref mut vec) => Box::new(vec) as Box<dyn Write>,
-        Secret::InFile(ref path) => Box::new(
-            File::create(path)
-                .map_err(|e| Error::secret_file_error(secret, e))?
-        ) as Box<dyn Write>,
+        Secret::InFile(ref path) => {
+            Box::new(File::create(path).map_err(|e| Error::secret_file_error(secret, e))?)
+                as Box<dyn Write>
+        }
     };
 
     // Now read in segments and compute the secrets and write the secrets to the destination
@@ -579,7 +585,7 @@ Calculated Hash: {}",
             ),
             Error::FileError(path, source) => {
                 write!(f, "File with path '{}' could not be used: {}", path, source)
-            },
+            }
             Error::IOError(source) => {
                 write!(f, "IOError: '{}'", source)
             }
@@ -592,12 +598,11 @@ Calculated Hash: {}",
 
 impl std::error::Error for Error {}
 
-
 impl Error {
     fn secret_file_error(secret: &Secret, e: std::io::Error) -> Self {
         match secret {
             Secret::InFile(ref path) => Error::FileError(String::from(path.to_str().unwrap()), e),
-            _ => Error::FileError(String::from("<Non-File-based IO Error>"), e)
+            _ => Error::FileError(String::from("<Non-File-based IO Error>"), e),
         }
     }
 }
